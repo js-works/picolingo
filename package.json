@@ -1,0 +1,90 @@
+{
+  "name": "picolingo",
+  "version": "0.0.1",
+  "description": "A small, type-safe i18n facade for vanilla JS, web components and React",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./message-format": {
+      "types": "./dist/message-format/index.d.ts",
+      "import": "./dist/message-format/index.js"
+    },
+    "./web-components": {
+      "types": "./dist/web-components/index.d.ts",
+      "import": "./dist/web-components/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/web-components/**"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "build:release": "vite build && node scripts/pack-source.mts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "loc": "sloc src/core.ts",
+    "loc:src": "sloc . --exclude 'node_modules|coverage|dist|\\.test\\.|\\.config\\.'",
+    "loc:json": "sloc src/core.ts --format json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/js-works/picolingo.git"
+  },
+  "keywords": [
+    "i18n",
+    "internationalization",
+    "localization",
+    "l10n",
+    "intl",
+    "typescript",
+    "web-components",
+    "custom-elements",
+    "react"
+  ],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/js-works/picolingo/issues"
+  },
+  "homepage": "https://github.com/js-works/picolingo#readme",
+  "devDependencies": {
+    "@microsoft/api-extractor": "7.58.9",
+    "@types/archiver": "7.0.0",
+    "@types/node": "26.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "4.1.9",
+    "archiver": "7.0.1",
+    "esbuild": "0.28.1",
+    "intl-messageformat": "^11.2.9",
+    "jsdom": "29.1.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.7",
+    "sloc": "0.3.2",
+    "typescript": "6.0.3",
+    "vite": "8.0.16",
+    "vite-plugin-dts": "5.0.2",
+    "vitest": "4.1.9"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}
