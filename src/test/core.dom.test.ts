@@ -6,11 +6,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createI18n, createNamespace, defaultLocaleSource } from "./core.js";
+import { createI18n, setupI18n, createNamespace, defaultLocaleSource } from "../main/core/index.js";
 
 const greetingTexts = createNamespace({ key: "greeting", defaults: { hello: "Hello" } });
 
-/** MutationObserver delivers asynchronously — wait one macrotask. */
+/** MutationObserver delivers asynchronously - wait one macrotask. */
 const tick = () => new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
 
 function setDocumentLang(lang: string | null): void {
@@ -24,7 +24,7 @@ function setDocumentLang(lang: string | null): void {
 describe("defaultLocaleSource (client, <html lang> monitor)", () => {
   it("reads the live lang attribute", () => {
     setDocumentLang("de-CH");
-    const i18n = createI18n({ localeSource: defaultLocaleSource() });
+    const i18n = createI18n(setupI18n({ localeSource: defaultLocaleSource() }));
     expect(i18n.locale()).toBe("de-CH");
     setDocumentLang("fr");
     expect(i18n.locale()).toBe("fr");
@@ -32,28 +32,31 @@ describe("defaultLocaleSource (client, <html lang> monitor)", () => {
 
   it("falls back to defaultLocale when the attribute is absent (and ignores serverSide)", () => {
     setDocumentLang(null);
-    const i18n = createI18n({
-      localeSource: defaultLocaleSource({ defaultLocale: "ja", serverSide: "de" }),
-    });
+    const i18n = createI18n(
+      setupI18n({
+        localeSource: defaultLocaleSource({ defaultLocale: "ja", serverSide: "de" }),
+      }),
+    );
     expect(i18n.locale()).toBe("ja"); // serverSide plays no role on the client
-    expect(createI18n({ localeSource: defaultLocaleSource() }).locale()).toBe("en-US");
+    expect(createI18n(setupI18n({ localeSource: defaultLocaleSource() })).locale()).toBe("en-US");
   });
 
   it("is the zero-config default on the client", () => {
     setDocumentLang("it");
-    const i18n = createI18n();
+    const i18n = createI18n(setupI18n());
     expect(i18n.locale()).toBe("it");
     expect(i18n.text(greetingTexts, "hello")).toBe("Hello");
   });
 
   it("notifies on lang changes and honors unsubscribe", async () => {
     setDocumentLang("de");
-    const i18n = createI18n({ localeSource: defaultLocaleSource() });
+    const runtime = setupI18n({ localeSource: defaultLocaleSource() });
+    const i18n = createI18n(runtime);
 
     const keptChanges = vi.fn();
     const removedChanges = vi.fn();
-    i18n.onChange(keptChanges);
-    const unsubscribe = i18n.onChange(removedChanges);
+    runtime.onChange(keptChanges);
+    const unsubscribe = runtime.onChange(removedChanges);
     unsubscribe();
 
     setDocumentLang("en");
@@ -87,7 +90,9 @@ describe("defaultLocaleSource (client, <html lang> monitor)", () => {
     // @ts-expect-error simulating a browser-like global without MutationObserver support
     delete globalThis.window.MutationObserver;
     try {
-      const i18n = createI18n({ localeSource: defaultLocaleSource({ defaultLocale: "ja" }) });
+      const i18n = createI18n(
+        setupI18n({ localeSource: defaultLocaleSource({ defaultLocale: "ja" }) }),
+      );
       expect(i18n.locale()).toBe("ja"); // fell through to the non-client branch
     } finally {
       globalThis.window.MutationObserver = original;
@@ -99,7 +104,9 @@ describe("defaultLocaleSource (client, <html lang> monitor)", () => {
     // @ts-expect-error simulating a global without a `document` (the detection branch itself)
     delete globalThis.document;
     try {
-      const i18n = createI18n({ localeSource: defaultLocaleSource({ defaultLocale: "ja" }) });
+      const i18n = createI18n(
+        setupI18n({ localeSource: defaultLocaleSource({ defaultLocale: "ja" }) }),
+      );
       expect(i18n.locale()).toBe("ja"); // fell through to the non-client branch
     } finally {
       globalThis.document = original;

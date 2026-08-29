@@ -1,5 +1,5 @@
 /**
- * Tests for the i18n facade (node environment — the server-side branches of
+ * Tests for the i18n facade (node environment - the server-side branches of
  * `defaultLocaleSource` and everything that does not need a DOM).
  * The client-side branches (<html lang> monitor) live in core.dom.test.ts.
  */
@@ -13,10 +13,20 @@ import {
   createNamespace,
   defaultLocaleSource,
   defaultTextSource,
+  setupI18n,
   someTexts,
-} from "./core.js";
+  textCatalog,
+} from "../main/core/index.js";
 
-import type { I18n, LocaleSource, TextBundle, TextMiddleware, TextSource } from "./core.js";
+import type {
+  I18n,
+  I18nRuntime,
+  LoadingAware,
+  LocaleSource,
+  TextBundle,
+  TextMiddleware,
+  TextSource,
+} from "../main/core/index.js";
 
 // -------------------------------------------------------------------
 // Shared fixtures
@@ -57,12 +67,20 @@ function createMutableLocaleSource(initial: string): LocaleSource & {
   };
 }
 
+function createFixedLocaleRuntime(
+  locale: string,
+  textSource?: TextSource,
+  middlewares?: TextMiddleware[],
+): I18nRuntime {
+  return setupI18n({ localeSource: locale, textSource, middlewares });
+}
+
 function createFixedLocaleI18n(
   locale: string,
   textSource?: TextSource,
   middlewares?: TextMiddleware[],
 ): I18n {
-  return createI18n({ localeSource: { getLocale: () => locale }, textSource, middlewares });
+  return createI18n(createFixedLocaleRuntime(locale, textSource, middlewares));
 }
 
 const tick = () => new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
@@ -109,9 +127,9 @@ describe("createNamespace / someTexts / allTexts / bundleTexts", () => {
   });
 
   it("someTexts rejects unknown keys", () => {
-    expect(() =>
-      someTexts(greetingTexts, { nope: "x" } as unknown as { hello?: string }),
-    ).toThrow(/unknown keys \["nope"\]/);
+    expect(() => someTexts(greetingTexts, { nope: "x" } as unknown as { hello?: string })).toThrow(
+      /unknown keys \["nope"\]/,
+    );
   });
 
   it("someTexts rejects a kind mismatch (string where a function is expected, and vice versa)", () => {
@@ -161,17 +179,43 @@ describe("createNamespace / someTexts / allTexts / bundleTexts", () => {
 // defaultLocaleSource (server-side branches)
 // -------------------------------------------------------------------
 
+describe("I18nConfig.localeSource shorthands", () => {
+  it("accepts a fixed tag", () => {
+    expect(createI18n(setupI18n({ localeSource: "de-CH" })).locale()).toBe("de-CH");
+  });
+
+  it("accepts a plain getter, re-read on every access", () => {
+    let current = "de";
+    const i18n = createI18n(setupI18n({ localeSource: () => current }));
+    expect(i18n.locale()).toBe("de");
+    current = "fr";
+    expect(i18n.locale()).toBe("fr"); // no change channel, but never stale
+  });
+
+  it("still accepts a full LocaleSource, change channel included", () => {
+    const mutableSource = createMutableLocaleSource("de");
+    const runtime = setupI18n({ localeSource: mutableSource });
+    const changes = vi.fn();
+    runtime.onChange(changes);
+    mutableSource.setLocale("fr");
+    expect(runtime.currentLocale()).toBe("fr");
+    expect(changes).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("defaultLocaleSource (server)", () => {
   it("accepts a fixed tag", () => {
-    const i18n = createI18n({ localeSource: defaultLocaleSource({ serverSide: "de" }) });
+    const i18n = createI18n(setupI18n({ localeSource: defaultLocaleSource({ serverSide: "de" }) }));
     expect(i18n.locale()).toBe("de");
   });
 
   it("accepts a live getter", () => {
     let requestLocale = "fr";
-    const i18n = createI18n({
-      localeSource: defaultLocaleSource({ serverSide: () => requestLocale }),
-    });
+    const i18n = createI18n(
+      setupI18n({
+        localeSource: defaultLocaleSource({ serverSide: () => requestLocale }),
+      }),
+    );
     expect(i18n.locale()).toBe("fr");
     requestLocale = "it";
     expect(i18n.locale()).toBe("it");
@@ -179,9 +223,10 @@ describe("defaultLocaleSource (server)", () => {
 
   it("accepts a full LocaleSource including its change channel", () => {
     const mutableSource = createMutableLocaleSource("es");
-    const i18n = createI18n({ localeSource: defaultLocaleSource({ serverSide: mutableSource }) });
+    const runtime = setupI18n({ localeSource: defaultLocaleSource({ serverSide: mutableSource }) });
+    const i18n = createI18n(runtime);
     const changes = vi.fn();
-    i18n.onChange(changes);
+    runtime.onChange(changes);
     mutableSource.setLocale("pt");
     expect(i18n.locale()).toBe("pt");
     expect(changes).toHaveBeenCalledTimes(1);
@@ -189,10 +234,12 @@ describe("defaultLocaleSource (server)", () => {
 
   it("falls back to defaultLocale without serverSide, and to en-US without options", () => {
     expect(
-      createI18n({ localeSource: defaultLocaleSource({ defaultLocale: "ja" }) }).locale(),
+      createI18n(
+        setupI18n({ localeSource: defaultLocaleSource({ defaultLocale: "ja" }) }),
+      ).locale(),
     ).toBe("ja");
-    expect(createI18n({ localeSource: defaultLocaleSource() }).locale()).toBe("en-US");
-    expect(createI18n().locale()).toBe("en-US"); // zero-config uses defaultLocaleSource()
+    expect(createI18n(setupI18n({ localeSource: defaultLocaleSource() })).locale()).toBe("en-US");
+    expect(createI18n(setupI18n()).locale()).toBe("en-US"); // zero-config uses defaultLocaleSource()
   });
 });
 
@@ -214,7 +261,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "de-CH",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
       }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("Hallo"); // de-CH -> de
@@ -224,7 +271,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "de-CH",
       defaultTextSource({
-        textBundles: [
+        texts: [
           {
             de: [
               someTexts(datePickerTexts, {
@@ -241,7 +288,7 @@ describe("resolution", () => {
   it("treats the empty string as a valid translation", () => {
     const i18n = createFixedLocaleI18n(
       "de",
-      defaultTextSource({ textBundles: [{ de: [someTexts(greetingTexts, { hello: "" })] }] }),
+      defaultTextSource({ texts: [{ de: [someTexts(greetingTexts, { hello: "" })] }] }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("");
   });
@@ -250,9 +297,7 @@ describe("resolution", () => {
     const looseText = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [
-          { de: [someTexts(datePickerTexts, { range: (params) => `${params.count}` })] },
-        ],
+        texts: [{ de: [someTexts(datePickerTexts, { range: (params) => `${params.count}` })] }],
       }),
     ).text as (namespace: unknown, key: unknown, params?: unknown) => string;
     // no params: the store fn is skipped AND the default fn is skipped -> bare key
@@ -267,11 +312,11 @@ describe("resolution", () => {
     expect(looseText(greetingTexts, "missing")).toBe("missing");
   });
 
-  it("merges bundle locale keys that normalize equally (last write wins)", () => {
+  it("merges bundle locale keys that normalize equally (first key in the entry wins)", () => {
     const i18n = createFixedLocaleI18n(
       "de-DE",
       defaultTextSource({
-        textBundles: [
+        texts: [
           {
             "de-DE": [someTexts(greetingTexts, { hello: "Hallo" })],
             "de-DE-u-co-phonebk": [someTexts(greetingTexts, { hello: "Hallo!" })], // same baseName
@@ -279,14 +324,42 @@ describe("resolution", () => {
         ],
       }),
     );
-    expect(i18n.text(greetingTexts, "hello")).toBe("Hallo!");
+    expect(i18n.text(greetingTexts, "hello")).toBe("Hallo");
+  });
+
+  it("gives an EARLIER texts entry precedence over a later one", () => {
+    const i18n = createFixedLocaleI18n(
+      "de",
+      defaultTextSource({
+        texts: [
+          { de: [someTexts(greetingTexts, { hello: "Override" })] },
+          { de: [someTexts(greetingTexts, { hello: "Hallo" })] },
+        ],
+      }),
+    );
+    expect(i18n.text(greetingTexts, "hello")).toBe("Override");
+  });
+
+  it("keeps declared precedence when a high-priority entry arrives LAST", async () => {
+    const i18n = createFixedLocaleI18n(
+      "de",
+      defaultTextSource({
+        texts: [
+          Promise.resolve({ de: [someTexts(greetingTexts, { hello: "Override" })] }),
+          { de: [someTexts(greetingTexts, { hello: "Hallo" })] },
+        ],
+      }),
+    );
+    expect(i18n.text(greetingTexts, "hello")).toBe("Hallo"); // only the sync entry so far
+    await tick();
+    expect(i18n.text(greetingTexts, "hello")).toBe("Override"); // the earlier entry displaces it
   });
 
   it("keeps invalid locale keys of a bundle usable as-is (normalize catch path)", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [{ "not a locale!!": [someTexts(greetingTexts, { hello: "Kaputt" })] }],
+        texts: [{ "not a locale!!": [someTexts(greetingTexts, { hello: "Kaputt" })] }],
       }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // unreachable entry, default wins
@@ -296,7 +369,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "zh-Hant-TW",
       defaultTextSource({
-        textBundles: [{ "zh-TW": [someTexts(greetingTexts, { hello: "你好" })] }],
+        texts: [{ "zh-TW": [someTexts(greetingTexts, { hello: "你好" })] }],
       }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("你好");
@@ -305,16 +378,16 @@ describe("resolution", () => {
   it("handles the language-less 'und' tag (chain without a language subtag)", () => {
     const i18n = createFixedLocaleI18n(
       "und",
-      defaultTextSource({ textBundles: [{ und: [someTexts(greetingTexts, { hello: "…" })] }] }),
+      defaultTextSource({ texts: [{ und: [someTexts(greetingTexts, { hello: "..." })] }] }),
     );
-    expect(i18n.text(greetingTexts, "hello")).toBe("…");
+    expect(i18n.text(greetingTexts, "hello")).toBe("...");
   });
 
   it("applies the fallbackLocales option of defaultTextSource", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [{ en: [someTexts(greetingTexts, { hello: "HelloEN" })] }],
+        texts: [{ en: [someTexts(greetingTexts, { hello: "HelloEN" })] }],
         fallbackLocales: ["en"],
       }),
     );
@@ -328,7 +401,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "fr",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
         fallbackLocales: ["es", "es", "de"],
       }),
     );
@@ -339,7 +412,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "fr",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
         fallbackLocales: ["es"],
       }),
     );
@@ -350,7 +423,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
         fallbackLocales: ["en"],
       }),
     );
@@ -372,7 +445,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "not a locale!!",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
       }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // opaque candidate misses the store
@@ -382,7 +455,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [{ de: someTexts(greetingTexts, { hello: "Hallo" }) }], // bare, no array
+        texts: [{ de: someTexts(greetingTexts, { hello: "Hallo" }) }], // bare, no array
       }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("Hallo");
@@ -392,9 +465,7 @@ describe("resolution", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [
-          { de: [someTexts(greetingTexts, { hello: undefined as unknown as string })] },
-        ],
+        texts: [{ de: [someTexts(greetingTexts, { hello: undefined as unknown as string })] }],
       }),
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // default still wins
@@ -426,7 +497,7 @@ describe("middlewares", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
       }),
       [
         (request, _context, next) => {
@@ -447,7 +518,7 @@ describe("middlewares", () => {
   it("can rewrite the request via next(patch)", () => {
     const i18n = createFixedLocaleI18n(
       "nb",
-      defaultTextSource({ textBundles: [{ no: [someTexts(greetingTexts, { hello: "Hei" })] }] }),
+      defaultTextSource({ texts: [{ no: [someTexts(greetingTexts, { hello: "Hei" })] }] }),
       [(request, _context, next) => next(request.locale === "nb" ? { locale: "no" } : undefined)],
     );
     expect(i18n.text(greetingTexts, "hello")).toBe("Hei");
@@ -484,9 +555,10 @@ describe("defaultTextSource (async inputs)", () => {
     const pendingBundle = new Promise<TextBundle>((resolvePromise) => {
       resolveBundle = resolvePromise;
     });
-    const i18n = createFixedLocaleI18n("de", defaultTextSource({ textBundles: [pendingBundle] }));
+    const runtime = createFixedLocaleRuntime("de", defaultTextSource({ texts: [pendingBundle] }));
+    const i18n = createI18n(runtime);
     const changes = vi.fn();
-    i18n.onChange(changes);
+    runtime.onChange(changes);
 
     expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // default until it lands
     resolveBundle({ de: [someTexts(greetingTexts, { hello: "Hallo" })] });
@@ -496,78 +568,99 @@ describe("defaultTextSource (async inputs)", () => {
   });
 
   it("does not notify for a settled bundle that adds nothing", async () => {
-    const i18n = createFixedLocaleI18n(
+    const runtime = createFixedLocaleRuntime(
       "de",
-      defaultTextSource({ textBundles: [Promise.resolve({} as TextBundle)] }),
+      defaultTextSource({ texts: [Promise.resolve({} as TextBundle)] }),
     );
     const changes = vi.fn();
-    i18n.onChange(changes);
+    runtime.onChange(changes);
     await tick();
     expect(changes).not.toHaveBeenCalled();
   });
 
-  it("invokes thunks lazily on the first resolution only", () => {
-    const thunk = vi.fn(() => ({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }));
-    const i18n = createFixedLocaleI18n("de", defaultTextSource({ textBundles: [thunk] }));
-    expect(thunk).not.toHaveBeenCalled();
-    expect(i18n.text(greetingTexts, "hello")).toBe("Hallo"); // first use triggers the thunk
-    expect(i18n.text(greetingTexts, "hello")).toBe("Hallo"); // second use: early return path
-    expect(thunk).toHaveBeenCalledTimes(1);
-  });
-
-  it("notifies when a synchronous thunk adds texts", () => {
-    const source = defaultTextSource({
-      textBundles: [() => ({ de: [someTexts(greetingTexts, { hello: "Hallo" })] })],
+  it("does not load a catalog until something asks for it", () => {
+    const load = vi.fn(() => ({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }));
+    defaultTextSource({
+      texts: [textCatalog({ namespaces: [greetingTexts], locales: ["de"], load })],
     });
-    const changes = vi.fn();
-    source.onChange!(changes);
-    source.resolve(
-      { locale: "de", namespace: greetingTexts, key: "hello", params: undefined },
-      { localize: () => createFixedLocaleI18n("de") },
-    );
-    expect(changes).toHaveBeenCalledTimes(1);
+    expect(load).not.toHaveBeenCalled();
   });
 
-  it("does not notify when a synchronous thunk adds nothing", () => {
-    const source = defaultTextSource({ textBundles: [() => ({}) as TextBundle] });
-    const changes = vi.fn();
-    source.onChange!(changes);
-    source.resolve(
-      { locale: "de", namespace: greetingTexts, key: "hello", params: undefined },
-      { localize: () => createFixedLocaleI18n("de") },
-    );
-    expect(changes).not.toHaveBeenCalled();
-  });
-
-  it("supports thunks returning promises", async () => {
+  it("loads a catalog on the first READ and swaps the text in when it lands", async () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [
-          () => Promise.resolve({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }),
+        texts: [
+          textCatalog({
+            namespaces: [greetingTexts],
+            locales: ["de"],
+            load: () => Promise.resolve({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }),
+          }),
         ],
       }),
     );
-    expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // triggers the load
+    expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // default, and starts the load
     await tick();
     expect(i18n.text(greetingTexts, "hello")).toBe("Hallo");
   });
 
-  it("reports rejected bundle loads and throwing thunks via console.error", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const i18n = createFixedLocaleI18n(
-      "de",
-      defaultTextSource({
-        textBundles: [
-          Promise.reject(new Error("load failed")),
-          () => {
-            throw new Error("thunk failed");
-          },
-        ],
-      }),
+  it("loads each (catalog, tag) pair only once, however often it is asked", async () => {
+    const load = vi.fn(() =>
+      Promise.resolve({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }),
     );
-    expect(i18n.text(greetingTexts, "hello")).toBe("Hello"); // thunk throw is contained
-    await tick(); // rejection is contained
+    const source = defaultTextSource({
+      texts: [textCatalog({ namespaces: [greetingTexts], locales: ["de"], load })],
+    }) as TextSource & LoadingAware;
+    await source.ensure("de", greetingTexts);
+    await source.ensure("de", greetingTexts);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when a catalog claims a namespace its bundle does not carry", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const source = defaultTextSource({
+      texts: [
+        textCatalog({
+          namespaces: [greetingTexts, datePickerTexts], // claims two ...
+          locales: ["de"],
+          load: () => ({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }), // ... delivers one
+        }),
+      ],
+    }) as TextSource & LoadingAware;
+    await source.ensure("de", greetingTexts);
+    expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining('"date-picker"'));
+    consoleWarn.mockRestore();
+  });
+
+  it("stays quiet when a catalog delivers everything it claims", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const source = defaultTextSource({
+      texts: [
+        textCatalog({
+          namespaces: [greetingTexts],
+          locales: ["de"],
+          load: () => ({ de: [someTexts(greetingTexts, { hello: "Hallo" })] }),
+        }),
+      ],
+    }) as TextSource & LoadingAware;
+    await source.ensure("de", greetingTexts);
+    expect(consoleWarn).not.toHaveBeenCalled();
+    consoleWarn.mockRestore();
+  });
+
+  it("reports a rejected load via console.error and gives up on it", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const load = vi.fn(() => Promise.reject(new Error("load failed")));
+    const source = defaultTextSource({
+      texts: [
+        Promise.reject(new Error("bundle failed")),
+        textCatalog({ namespaces: [greetingTexts], locales: ["de"], load }),
+      ],
+    }) as TextSource & LoadingAware;
+    await source.ensure("de", greetingTexts);
+    await tick();
+    await source.ensure("de", greetingTexts); // final: no retry
+    expect(load).toHaveBeenCalledTimes(1);
     expect(consoleError).toHaveBeenCalledTimes(2);
   });
 
@@ -578,7 +671,7 @@ describe("defaultTextSource (async inputs)", () => {
     expect(() => unsubscribe()).not.toThrow();
   });
 
-  it("with no textBundles at all, resolves straight to the defaults", () => {
+  it("with no texts at all, resolves straight to the defaults", () => {
     const i18n = createFixedLocaleI18n("de", defaultTextSource());
     expect(i18n.text(greetingTexts, "hello")).toBe("Hello");
   });
@@ -590,7 +683,7 @@ describe("defaultTextSource (async inputs)", () => {
 
 describe("hasText", () => {
   const textSource = defaultTextSource({
-    textBundles: [
+    texts: [
       {
         de: [
           someTexts(greetingTexts, { hello: "Hallo" }),
@@ -600,25 +693,31 @@ describe("hasText", () => {
     ],
   });
 
-  it("includeFallback: false (default) — true only for a real store hit in the current locale", () => {
+  it("includeFallback: false (default) - true only for a real store hit in the current locale", () => {
     const i18n = createFixedLocaleI18n("de-CH", textSource); // narrows de-CH -> de
     expect(i18n.hasText(greetingTexts, "hello")).toBe(true);
     expect(i18n.hasText(greetingTexts, "hello", false)).toBe(true);
     expect(i18n.hasText(datePickerTexts, "today")).toBe(false); // only in defaults, not the source
   });
 
-  it("includeFallback: true — true whenever text() would return something other than the bare key", () => {
+  it("includeFallback: true - true whenever text() would return something other than the bare key", () => {
     const i18n = createFixedLocaleI18n("de", textSource);
     expect(i18n.hasText(greetingTexts, "hello", true)).toBe(true); // source hit
     expect(i18n.hasText(datePickerTexts, "today", true)).toBe(true); // default hit
-    const looseHasText = i18n.hasText as (namespace: unknown, key: unknown, full?: boolean) => boolean;
+    const looseHasText = i18n.hasText as (
+      namespace: unknown,
+      key: unknown,
+      full?: boolean,
+    ) => boolean;
     expect(looseHasText(greetingTexts, "missing", true)).toBe(false); // hard miss
   });
 
-  it("a dynamic (function) key is a resolveExact hit but not an includeFallback hit (no real params passed)", () => {
+  it("a dynamic (function) key counts for both hasText modes - existence, not production", () => {
     const i18n = createFixedLocaleI18n("de", textSource);
     expect(i18n.hasText(datePickerTexts, "range", false)).toBe(true);
-    expect(i18n.hasText(datePickerTexts, "range", true)).toBe(false);
+    // Existence, not production: the key has a translation function, and `hasText`
+    // reports it without inventing params to invoke it with.
+    expect(i18n.hasText(datePickerTexts, "range", true)).toBe(true);
   });
 
   it("is false with no textSource configured at all", () => {
@@ -643,17 +742,27 @@ describe("hasText", () => {
 // -------------------------------------------------------------------
 
 describe("I18n facade", () => {
-  it("withLocale() memoizes siblings", () => {
+  it("withLocale() binds a sibling to the requested tag, exactly as passed", () => {
     const i18n = createFixedLocaleI18n("de");
-    const frenchI18n = i18n.withLocale("fr");
-    expect(frenchI18n.locale()).toBe("fr");
-    expect(i18n.withLocale("fr")).toBe(frenchI18n); // memoized
+    expect(i18n.withLocale("fr").locale()).toBe("fr");
+    expect(i18n.withLocale("en-US-u-nu-arab").locale()).toBe("en-US-u-nu-arab");
     expect(Object.isFrozen(i18n)).toBe(true);
   });
 
-  it("withLocale() de-duplicates case-only tag variants via canonicalLocale", () => {
+  it("withLocale() memoizes siblings per runtime, and de-duplicates case-only variants", () => {
     const i18n = createFixedLocaleI18n("de");
+    expect(i18n.withLocale("fr")).toBe(i18n.withLocale("fr"));
     expect(i18n.withLocale("en-US")).toBe(i18n.withLocale("en-us"));
+    // A sibling of a sibling is the same object - they share the runtime's cache.
+    expect(i18n.withLocale("fr").withLocale("fr")).toBe(i18n.withLocale("fr"));
+  });
+
+  it("createI18n() always creates: a fresh identity per call, on purpose", () => {
+    const runtime = createFixedLocaleRuntime("de");
+    expect(createI18n(runtime, "fr")).not.toBe(createI18n(runtime, "fr"));
+    expect(createI18n(runtime, "fr").text(greetingTexts, "hello")).toBe(
+      createI18n(runtime, "fr").text(greetingTexts, "hello"),
+    );
   });
 
   it("withLocale() tolerates an invalid tag (canonicalLocale catch path) without throwing", () => {
@@ -662,21 +771,24 @@ describe("I18n facade", () => {
     expect(i18n.withLocale("not a locale!!").locale()).toBe("not a locale!!");
   });
 
-  it("statically bound siblings share the change channel", () => {
+  it("a bound sibling keeps its locale while the ambient one moves on", () => {
     const mutableSource = createMutableLocaleSource("de");
-    const i18n = createI18n({ localeSource: mutableSource });
+    const runtime = setupI18n({ localeSource: mutableSource });
+    const i18n = createI18n(runtime);
+    const french = i18n.withLocale("fr");
     const changes = vi.fn();
-    i18n.withLocale("fr").onChange(changes); // subscribe via the SIBLING
+    runtime.onChange(changes); // the change channel lives on the runtime
     mutableSource.setLocale("en");
     expect(changes).toHaveBeenCalledTimes(1);
     expect(i18n.locale()).toBe("en");
+    expect(french.locale()).toBe("fr");
   });
 
   it("onChange unsubscribe removes the listener and is idempotent", () => {
     const mutableSource = createMutableLocaleSource("de");
-    const i18n = createI18n({ localeSource: mutableSource });
+    const runtime = setupI18n({ localeSource: mutableSource });
     const changes = vi.fn();
-    const unsubscribe = i18n.onChange(changes);
+    const unsubscribe = runtime.onChange(changes);
     unsubscribe();
     unsubscribe();
     mutableSource.setLocale("en");
@@ -693,9 +805,9 @@ describe("I18n facade", () => {
         return () => undefined;
       },
     };
-    const i18n = createI18n({ localeSource: mutableSource, textSource });
+    const runtime = setupI18n({ localeSource: mutableSource, textSource });
     const changes = vi.fn();
-    i18n.onChange(changes);
+    runtime.onChange(changes);
     mutableSource.setLocale("en");
     for (const listener of textListeners) listener();
     expect(changes).toHaveBeenCalledTimes(2); // both channels feed the same listener set
@@ -753,12 +865,131 @@ describe("I18n facade", () => {
     const i18n = createFixedLocaleI18n(
       "de",
       defaultTextSource({
-        textBundles: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
       }),
     );
     const greetingLookup = i18n.bindTexts(greetingTexts);
     expect(greetingLookup("hello")).toBe("Hallo"); // scoped
     expect(greetingLookup(datePickerTexts, "today")).toBe("Today"); // fully-qualified escape
     expect(greetingLookup(datePickerTexts, "range", { count: 4 })).toBe("4 days");
+  });
+});
+
+// -------------------------------------------------------------------
+// Composing several text sources
+// -------------------------------------------------------------------
+
+describe("textSource as a list", () => {
+  const appSource: TextSource = {
+    resolve: (request) => (request.key === "hello" ? "App-Hallo" : undefined),
+  };
+  const librarySource: TextSource = {
+    resolve: (request) => (request.key === "hello" ? "Lib-Hallo" : undefined),
+  };
+
+  it("lets the FIRST source that answers win", () => {
+    const i18n = createI18n(
+      setupI18n({
+        localeSource: "de",
+        textSource: [appSource, librarySource],
+      }),
+    );
+    expect(i18n.text(greetingTexts, "hello")).toBe("App-Hallo");
+  });
+
+  it("falls through a source that misses", () => {
+    const i18n = createI18n(
+      setupI18n({
+        localeSource: "de",
+        textSource: [{ resolve: () => undefined }, librarySource],
+      }),
+    );
+    expect(i18n.text(greetingTexts, "hello")).toBe("Lib-Hallo");
+  });
+
+  it("falls through to the namespace defaults when every source misses", () => {
+    const i18n = createI18n(
+      setupI18n({
+        localeSource: "de",
+        textSource: [{ resolve: () => undefined }, { resolve: () => undefined }],
+      }),
+    );
+    expect(i18n.text(greetingTexts, "hello")).toBe("Hello");
+  });
+
+  it("merges the change channels, so a load in ANY member notifies", async () => {
+    const first = defaultTextSource({
+      texts: [Promise.resolve({ de: [someTexts(greetingTexts, { hello: "Eins" })] })],
+    });
+    const second = defaultTextSource({
+      texts: [Promise.resolve({ de: [someTexts(datePickerTexts, { today: "Heute" })] })],
+    });
+    const runtime = setupI18n({
+      localeSource: "de",
+      textSource: [first, second],
+    });
+    const i18n = createI18n(runtime);
+    const changes = vi.fn();
+    runtime.onChange(changes);
+
+    await tick();
+    expect(changes).toHaveBeenCalledTimes(2); // once per member
+    expect(i18n.text(greetingTexts, "hello")).toBe("Eins");
+    expect(i18n.text(datePickerTexts, "today")).toBe("Heute");
+  });
+
+  it("unsubscribing from the composed channel detaches every member", async () => {
+    const source = defaultTextSource({
+      texts: [Promise.resolve({ de: [someTexts(greetingTexts, { hello: "Eins" })] })],
+    });
+    const runtime = setupI18n({
+      localeSource: "de",
+      textSource: [source, defaultTextSource()],
+    });
+    const changes = vi.fn();
+    runtime.onChange(changes)();
+    await tick();
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it("forwards resolveExact to the first source that has an answer", () => {
+    const exactSource: TextSource = {
+      resolve: () => undefined,
+      resolveExact: (_locale, _namespace, key) => (key === "hello" ? "Hallo" : undefined),
+    };
+    const i18n = createI18n(
+      setupI18n({
+        localeSource: "de",
+        textSource: [{ resolve: () => undefined }, exactSource],
+      }),
+    );
+    expect(i18n.hasText(greetingTexts, "hello")).toBe(true);
+  });
+
+  it("fans `ensure` out to every member that can load, and skips those that cannot", async () => {
+    const asked: string[] = [];
+    const awaitable: TextSource & LoadingAware = {
+      resolve: () => undefined,
+      ensure: (locale) => {
+        asked.push(locale);
+        return Promise.resolve();
+      },
+    };
+    const plain: TextSource = { resolve: () => undefined };
+    const runtime = setupI18n({
+      localeSource: "de",
+      textSource: [plain, awaitable],
+    });
+    // The gate goes through the runtime, exactly as every binding does.
+    await runtime.ensureTexts([greetingTexts], "de");
+    expect(asked).toEqual(["de"]);
+  });
+
+  it("reports nothing to wait for when no member can load", () => {
+    const runtime = setupI18n({
+      localeSource: "de",
+      textSource: [{ resolve: () => undefined }, { resolve: () => undefined }],
+    });
+    expect(runtime.ensureTexts([greetingTexts], "de")).toBeUndefined();
   });
 });

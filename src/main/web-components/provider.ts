@@ -1,4 +1,4 @@
-import type { I18n, Unsubscribe } from "../core";
+import type { I18nRuntime, Unsubscribe } from "../core/index.js";
 
 export { i18nContext, provideI18n, ContextRequestEvent, I18nProviderElement };
 
@@ -31,26 +31,29 @@ function isI18nRequest(event: Event): event is Event & ContextRequestEvent {
 // -------------------------------------------------------------------
 
 // The context key. `Symbol.for` (global symbol registry) so that multiple copies or
-// versions of this module in one bundle still interoperate — key equality is the
-// protocol's only identity mechanism.
-const i18nContext: symbol = Symbol.for("i18n-facade.I18n");
+// versions of this module in one bundle still interoperate - key equality is the
+// protocol's only identity mechanism. The trailing `@1` versions the VALUE contract
+// (the shape of `I18nRuntime`), not the package: two copies find each other only while
+// they agree on it, and a mismatch degrades to "no provider found" instead of to a
+// TypeError at the first call.
+const i18nContext: symbol = Symbol.for("picolingo.I18nRuntime@1");
 
-type ContextCallback = (value: I18n, unsubscribe?: Unsubscribe) => void;
+type ContextCallback = (value: I18nRuntime, unsubscribe?: Unsubscribe) => void;
 
 /**
- * Make `target` answer i18n context requests with the given instance. Mount it on any
- * ancestor of the consuming components — `document.body` for app-wide provision.
+ * Make `target` answer i18n context requests with the given runtime. Mount it on any
+ * ancestor of the consuming components - `document.body` for app-wide provision.
  * Returns an Unsubscribe that stops providing.
  */
-function provideI18n(target: EventTarget, i18n: I18n): Unsubscribe {
+function provideI18n(target: EventTarget, runtime: I18nRuntime): Unsubscribe {
   const listener = (event: Event): void => {
     if (!isI18nRequest(event)) {
-      return; // some other context's request — let it bubble on
+      return; // some other context's request - let it bubble on
     }
     event.stopPropagation();
-    // Our provided value never changes (the instance is stable; its CONTENT changes
-    // are delivered via i18n.onChange), so subscribers get a no-op unsubscribe.
-    event.callback(i18n, event.subscribe ? () => undefined : undefined);
+    // Our provided value never changes (the runtime is stable; locale and text changes
+    // are delivered via runtime.onChange), so subscribers get a no-op unsubscribe.
+    event.callback(runtime, event.subscribe ? () => undefined : undefined);
   };
 
   target.addEventListener("context-request", listener);
@@ -65,19 +68,19 @@ const ElementBase: typeof HTMLElement =
 /**
  * Declarative provider for templates:
  *
- *   <i18n-provider .i18n=${appI18n}>
+ *   <i18n-provider .runtime=${appRuntime}>
  *     <fancy-date-picker></fancy-date-picker>
  *   </i18n-provider>
  *
  * Layout-neutral (`display: contents`). Value semantics:
- *   - Requests arriving while `i18n` is set are answered and claimed (stopPropagation).
- *   - Requests arriving BEFORE `i18n` is set are NOT claimed (an outer provider may
+ *   - Requests arriving while `runtime` is set are answered and claimed (stopPropagation).
+ *   - Requests arriving BEFORE `runtime` is set are NOT claimed (an outer provider may
  *     serve meanwhile); `subscribe` requests are remembered and answered as soon as a
- *     value arrives — consumers keep the latest answer.
- *   - Setting a NEW instance re-notifies all subscribed consumers.
+ *     value arrives - consumers keep the latest answer.
+ *   - Setting a NEW runtime re-notifies all subscribed consumers.
  */
 class I18nProviderElement extends ElementBase {
-  #i18n: I18n | null = null;
+  #runtime: I18nRuntime | null = null;
   // subscriber -> its STABLE unsubscribe (stable so consumers can compare identity
   // across repeated answers, as e.g. @lit/context consumers do)
   #subscribers = new Map<ContextCallback, Unsubscribe>();
@@ -94,25 +97,25 @@ class I18nProviderElement extends ElementBase {
         unsubscribe = () => void this.#subscribers.delete(callback);
         this.#subscribers.set(callback, unsubscribe);
       }
-      if (this.#i18n) {
+      if (this.#runtime) {
         event.stopPropagation();
-        callback(this.#i18n, unsubscribe);
+        callback(this.#runtime, unsubscribe);
       }
       // no value yet: keep the subscription, but let the request bubble on so an
       // outer provider can serve in the meantime.
-    } else if (this.#i18n) {
+    } else if (this.#runtime) {
       event.stopPropagation();
-      callback(this.#i18n);
+      callback(this.#runtime);
     }
   };
 
-  get i18n(): I18n | null {
-    return this.#i18n;
+  get runtime(): I18nRuntime | null {
+    return this.#runtime;
   }
 
-  set i18n(value: I18n | null) {
-    if (value === this.#i18n) return;
-    this.#i18n = value;
+  set runtime(value: I18nRuntime | null) {
+    if (value === this.#runtime) return;
+    this.#runtime = value;
     if (value) {
       for (const [callback, unsubscribe] of [...this.#subscribers] /* NOSONAR */) {
         callback(value, unsubscribe);
@@ -130,7 +133,7 @@ class I18nProviderElement extends ElementBase {
   }
 }
 
-// Register on import — guarded against double registration (duplicate bundle copies)
+// Register on import - guarded against double registration (duplicate bundle copies)
 // and against non-browser environments.
 if (globalThis.customElements && !globalThis.customElements.get("i18n-provider")) {
   globalThis.customElements.define("i18n-provider", I18nProviderElement);

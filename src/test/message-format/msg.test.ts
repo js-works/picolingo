@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createI18n, createNamespace } from "../core.js";
-import { msg } from "./msg.js";
+import { createI18n, setupI18n, createNamespace } from "../../main/core/index.js";
+import { msg } from "../../main/message-format/msg.js";
 
 describe("msg (ICU MessageFormat)", () => {
   it("formats a static message with an interpolated placeholder", () => {
@@ -13,7 +13,7 @@ describe("msg (ICU MessageFormat)", () => {
       key: "greeting",
       defaults: { welcome: msg<{ name: string }>`Hello, {name}!` },
     });
-    const i18n = createI18n({ localeSource: { getLocale: () => "en" } });
+    const i18n = createI18n(setupI18n({ localeSource: "en" }));
     expect(i18n.text(greetingTexts, "welcome", { name: "Ada" })).toBe("Hello, Ada!");
   });
 
@@ -24,7 +24,7 @@ describe("msg (ICU MessageFormat)", () => {
         itemCount: msg<{ count: number }>`{count, plural, one {# item} other {# items}}`,
       },
     });
-    const i18n = createI18n({ localeSource: { getLocale: () => "en" } });
+    const i18n = createI18n(setupI18n({ localeSource: "en" }));
     expect(i18n.text(cartTexts, "itemCount", { count: 1 })).toBe("1 item");
     expect(i18n.text(cartTexts, "itemCount", { count: 3 })).toBe("3 items");
   });
@@ -34,8 +34,8 @@ describe("msg (ICU MessageFormat)", () => {
       key: "price",
       defaults: { amount: msg<{ value: number }>`{value, number}` },
     });
-    const i18nDe = createI18n({ localeSource: { getLocale: () => "de" } });
-    const i18nEn = createI18n({ localeSource: { getLocale: () => "en" } });
+    const i18nDe = createI18n(setupI18n({ localeSource: "de" }));
+    const i18nEn = createI18n(setupI18n({ localeSource: "en" }));
     expect(i18nDe.text(priceTexts, "amount", { value: 1234.5 })).toBe("1.234,5");
     expect(i18nEn.text(priceTexts, "amount", { value: 1234.5 })).toBe("1,234.5");
   });
@@ -45,14 +45,14 @@ describe("msg (ICU MessageFormat)", () => {
       key: "cache-ns",
       defaults: { greet: msg<{ n: string }>`Hi {n}` },
     });
-    const i18n = createI18n({ localeSource: { getLocale: () => "en" } });
+    const i18n = createI18n(setupI18n({ localeSource: "en" }));
     expect(i18n.text(ns, "greet", { n: "A" })).toBe("Hi A"); // cache miss: compiles and caches
     expect(i18n.text(ns, "greet", { n: "B" })).toBe("Hi B"); // cache hit: same compiled formatter
   });
 
   it("can be invoked directly as a TranslationFn without a namespace", () => {
     const translate = msg<{ name: string }>`Hi {name}`;
-    const i18n = createI18n({ localeSource: { getLocale: () => "en" } });
+    const i18n = createI18n(setupI18n({ localeSource: "en" }));
     expect(translate({ name: "Ada" }, i18n)).toBe("Hi Ada");
   });
 

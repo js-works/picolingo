@@ -1,0 +1,28 @@
+[
+  {
+    "name": "Core only",
+    "path": "dist/index.js"
+  },
+  {
+    "name": "Core + React bindings",
+    "path": "scripts/size/app-react.js",
+    "ignore": ["react", "react-dom"]
+  },
+  {
+    "name": "Core + Web Components bindings",
+    "path": "scripts/size/app-web-components.js"
+  },
+  {
+    "name": "Core + React bindings + ICU MessageFormat",
+    "path": "scripts/size/app-react-icu.js",
+    "ignore": ["react", "react-dom"]
+  },
+  {
+    "name": "Core + Web Components bindings + ICU MessageFormat",
+    "path": "scripts/size/app-web-components-icu.js"
+  },
+  {
+    "name": "picolingo/dev (tooling, not shipped)",
+    "path": "dist/dev/index.js"
+  }
+]

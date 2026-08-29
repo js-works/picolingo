@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Tests for the React integration: `I18nProvider` (React context + DOM Context
+ * Tests for the React bindings: `I18nProvider` (React context + DOM Context
  * Community Protocol bridge) and `useI18n` (reactive snapshot + bound `t`).
  */
 
@@ -9,13 +9,21 @@ import { act, createElement as h, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
-import { createI18n, createNamespace } from "../core.js";
-import type { I18n, LoadingAware, LocaleSource, TextSource } from "../core.js";
-import { i18nContext } from "../web-components/index.js";
-import { I18nProvider, useI18n, useI18nSuspense } from "./context.js";
+import {
+  createNamespace,
+  defaultTextSource,
+  setupI18n,
+  someTexts,
+  textCatalog,
+} from "../../main/core/index.js";
+import type { I18nRuntime, LoadingAware, LocaleSource, TextSource } from "../../main/core/index.js";
+import { i18nContext } from "../../main/web-components/provider.js";
+import { I18nProvider, useI18n, useSuspenseTexts } from "../../main/react/context.js";
 
 // React 19's act() warns unless this is set, absent a testing-library environment.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const greetingTexts = createNamespace({
   key: "greeting",
@@ -25,8 +33,8 @@ const greetingTexts = createNamespace({
   },
 });
 
-function createFixedLocaleI18n(locale: string): I18n {
-  return createI18n({ localeSource: { getLocale: () => locale } });
+function createFixedLocaleRuntime(locale: string): I18nRuntime {
+  return setupI18n({ localeSource: locale });
 }
 
 /** A locale source with a controllable locale and change channel. */
@@ -64,7 +72,7 @@ function mount(node: Parameters<typeof h>[0], props?: unknown, ...children: unkn
 
 function dispatchContextRequest(
   target: Element,
-  callback: (value: I18n, unsubscribe?: () => void) => void,
+  callback: (value: I18nRuntime, unsubscribe?: () => void) => void,
 ): void {
   target.dispatchEvent(
     Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
@@ -91,26 +99,22 @@ describe("useI18n", () => {
   });
 
   it("scopes t to the given namespace, including dynamic (parameterized) keys", () => {
-    const appI18n = createFixedLocaleI18n("de");
+    const appRuntime = createFixedLocaleRuntime("de");
     function Display() {
       const { t } = useI18n(greetingTexts);
       return h("span", { id: "out" }, t("welcome", { name: "Ada" }));
     }
-    mount(I18nProvider, { i18n: appI18n }, h(Display, null));
+    mount(I18nProvider, { runtime: appRuntime }, h(Display, null));
     expect(container.querySelector("#out")!.textContent).toBe("Welcome, Ada!");
   });
 
   it("without a namespace, returns a fully-qualified t and the raw i18n facade", () => {
-    const appI18n = createFixedLocaleI18n("de-DE");
+    const appRuntime = createFixedLocaleRuntime("de-DE");
     function Display() {
       const { t, i18n } = useI18n();
-      return h(
-        "span",
-        { id: "out" },
-        `${t(greetingTexts, "hello")}:${i18n.formatNumber(1234.5)}`,
-      );
+      return h("span", { id: "out" }, `${t(greetingTexts, "hello")}:${i18n.formatNumber(1234.5)}`);
     }
-    mount(I18nProvider, { i18n: appI18n }, h(Display, null));
+    mount(I18nProvider, { runtime: appRuntime }, h(Display, null));
     expect(container.querySelector("#out")!.textContent).toBe(
       `Hello:${new Intl.NumberFormat("de-DE").format(1234.5)}`,
     );
@@ -118,13 +122,13 @@ describe("useI18n", () => {
 
   it("re-renders with a fresh statically-bound snapshot on locale change", () => {
     const mutableSource = createMutableLocaleSource("de");
-    const appI18n = createI18n({ localeSource: mutableSource });
+    const appRuntime = setupI18n({ localeSource: mutableSource });
 
     function Display() {
       const { t, i18n } = useI18n(greetingTexts);
       return h("span", { id: "out" }, `${i18n.locale()}:${t("hello")}`);
     }
-    mount(I18nProvider, { i18n: appI18n }, h(Display, null));
+    mount(I18nProvider, { runtime: appRuntime }, h(Display, null));
     expect(container.querySelector("#out")!.textContent).toBe("de:Hello");
 
     act(() => mutableSource.setLocale("fr"));
@@ -136,17 +140,16 @@ describe("useI18n", () => {
     const pendingBundle = new Promise((resolvePromise) => {
       resolveBundle = resolvePromise;
     });
-    const { defaultTextSource, someTexts } = await import("../core.js");
-    const appI18n = createI18n({
-      localeSource: { getLocale: () => "de" },
-      textSource: defaultTextSource({ textBundles: [pendingBundle as never] }),
+    const appRuntime = setupI18n({
+      localeSource: "de",
+      textSource: defaultTextSource({ texts: [pendingBundle as never] }),
     });
 
     function Display() {
       const { t } = useI18n(greetingTexts);
       return h("span", { id: "out" }, t("hello"));
     }
-    mount(I18nProvider, { i18n: appI18n }, h(Display, null));
+    mount(I18nProvider, { runtime: appRuntime }, h(Display, null));
     expect(container.querySelector("#out")!.textContent).toBe("Hello");
 
     await act(async () => {
@@ -157,15 +160,15 @@ describe("useI18n", () => {
   });
 
   it("adopts a new i18n instance when the provider's prop changes", () => {
-    const first = createFixedLocaleI18n("de");
-    const second = createFixedLocaleI18n("fr");
+    const first = createFixedLocaleRuntime("de");
+    const second = createFixedLocaleRuntime("fr");
 
     function Display() {
       const { i18n } = useI18n();
       return h("span", { id: "out" }, i18n.locale());
     }
-    function App({ current }: { current: I18n }) {
-      return h(I18nProvider, { i18n: current }, h(Display, null));
+    function App({ current }: { current: I18nRuntime }) {
+      return h(I18nProvider, { runtime: current }, h(Display, null));
     }
 
     mount(App, { current: first });
@@ -178,26 +181,26 @@ describe("useI18n", () => {
 
 describe("I18nProvider", () => {
   it("bridges the instance onto the DOM Context Community Protocol from its wrapper div", () => {
-    const appI18n = createFixedLocaleI18n("de");
+    const appRuntime = createFixedLocaleRuntime("de");
     function Child() {
       return h("span", { id: "marker" }, "child");
     }
-    mount(I18nProvider, { i18n: appI18n }, h(Child, null));
+    mount(I18nProvider, { runtime: appRuntime }, h(Child, null));
 
     const wrapperDiv = container.querySelector("div")!;
     expect(wrapperDiv.style.display).toBe("contents");
 
     const answers = vi.fn();
     dispatchContextRequest(container.querySelector("#marker")!, answers);
-    expect(answers).toHaveBeenCalledWith(appI18n, undefined);
+    expect(answers).toHaveBeenCalledWith(appRuntime, undefined);
   });
 
   it("re-provides (unsubscribing the old listener) when the i18n prop changes", () => {
-    const first = createFixedLocaleI18n("de");
-    const second = createFixedLocaleI18n("fr");
+    const first = createFixedLocaleRuntime("de");
+    const second = createFixedLocaleRuntime("fr");
 
-    function App({ current }: { current: I18n }) {
-      return h(I18nProvider, { i18n: current }, h("span", { id: "marker" }, "child"));
+    function App({ current }: { current: I18nRuntime }) {
+      return h(I18nProvider, { runtime: current }, h("span", { id: "marker" }, "child"));
     }
     mount(App, { current: first });
 
@@ -213,8 +216,8 @@ describe("I18nProvider", () => {
   });
 
   it("stops providing once unmounted", () => {
-    const appI18n = createFixedLocaleI18n("de");
-    mount(I18nProvider, { i18n: appI18n }, h("span", { id: "marker" }, "child"));
+    const appRuntime = createFixedLocaleRuntime("de");
+    mount(I18nProvider, { runtime: appRuntime }, h("span", { id: "marker" }, "child"));
     const marker = container.querySelector("#marker")!;
 
     act(() => root.unmount());
@@ -225,8 +228,8 @@ describe("I18nProvider", () => {
   });
 });
 
-describe("useI18nSuspense", () => {
-  /** An async source that misses (→ defaults) while loading, then serves after `settle()`. */
+describe("useSuspenseTexts", () => {
+  /** An async source that misses (-> defaults) while loading, then serves after `settle()`. */
   function createControllableAsyncSource(hit: string) {
     let loading = true;
     const listeners = new Set<() => void>();
@@ -235,10 +238,8 @@ describe("useI18nSuspense", () => {
       resolveReady = resolvePromise;
     });
     const source: TextSource & LoadingAware = {
-      resolve: (request) =>
-        loading ? undefined : request.key === "hello" ? hit : undefined,
-      isLoading: () => loading,
-      whenReady: () => ready,
+      resolve: (request) => (loading ? undefined : request.key === "hello" ? hit : undefined),
+      ensure: () => (loading ? ready : undefined),
       onChange: (listener) => {
         listeners.add(listener);
         return () => void listeners.delete(listener);
@@ -254,16 +255,17 @@ describe("useI18nSuspense", () => {
 
   it("suspends while loading, then renders the real texts (never the default)", async () => {
     const { source, settle } = createControllableAsyncSource("Hallo");
-    const appI18n = createI18n({ localeSource: { getLocale: () => "de" }, textSource: source });
+    const appRuntime = setupI18n({ localeSource: "de", textSource: source });
 
     function Display() {
-      const { t } = useI18nSuspense(source, greetingTexts);
+      useSuspenseTexts([greetingTexts]);
+      const { t } = useI18n(greetingTexts);
       return h("span", { id: "out" }, t("hello"));
     }
     mount(
       Suspense,
-      { fallback: h("span", { id: "fallback" }, "loading…") },
-      h(I18nProvider, { i18n: appI18n }, h(Display, null)),
+      { fallback: h("span", { id: "fallback" }, "loading...") },
+      h(I18nProvider, { runtime: appRuntime }, h(Display, null)),
     );
 
     // Suspended: fallback shown, the default "Hello" is never painted.
@@ -279,22 +281,120 @@ describe("useI18nSuspense", () => {
     expect(container.querySelector("#out")!.textContent).toBe("Hallo");
   });
 
-  it("does not suspend when the source reports the namespace already ready", () => {
-    const readySource: TextSource & LoadingAware = {
-      resolve: (request) => (request.key === "hello" ? "Hallo" : undefined),
-      isLoading: () => false,
-      whenReady: () => Promise.resolve(),
+  it("asks EVERY namespace before suspending, so the loads run in parallel", () => {
+    const asked: string[] = [];
+    const pending = new Promise<void>(() => undefined); // never settles
+    const source: TextSource & LoadingAware = {
+      resolve: () => undefined,
+      ensure: (_locale, namespace) => {
+        asked.push(namespace.key);
+        return pending;
+      },
     };
-    const appI18n = createI18n({ localeSource: { getLocale: () => "de" }, textSource: readySource });
+    const appRuntime = setupI18n({ localeSource: "de", textSource: source });
+    const otherTexts = createNamespace({ key: "other", defaults: { hi: "Hi" } });
 
     function Display() {
-      const { t } = useI18nSuspense(readySource, greetingTexts);
+      useSuspenseTexts([greetingTexts, otherTexts]);
+      return h("span", null, "unreachable");
+    }
+    mount(
+      Suspense,
+      { fallback: h("span", { id: "fallback" }, "loading...") },
+      h(I18nProvider, { runtime: appRuntime }, h(Display, null)),
+    );
+
+    expect(container.querySelector("#fallback")).not.toBeNull();
+    // Both were asked in the SAME pass: the pending first namespace did not cut the
+    // second one off. (React may repeat the pass, hence the slice.)
+    expect(asked.slice(0, 2)).toEqual(["greeting", "other"]);
+  });
+
+  it("preloading the target locale switches without suspending", async () => {
+    const mutableSource = createMutableLocaleSource("en");
+    const runtime = setupI18n({
+      localeSource: mutableSource,
+      textSource: defaultTextSource({
+        texts: [
+          textCatalog({
+            namespaces: [greetingTexts],
+            locales: ["fr"],
+            load: async () => {
+              await tick();
+              return { fr: [someTexts(greetingTexts, { hello: "Bonjour" })] };
+            },
+          }),
+        ],
+      }),
+    });
+
+    function Display() {
+      useSuspenseTexts([greetingTexts]);
+      const { t } = useI18n(greetingTexts);
       return h("span", { id: "out" }, t("hello"));
     }
     mount(
       Suspense,
-      { fallback: h("span", { id: "fallback" }, "loading…") },
-      h(I18nProvider, { i18n: appI18n }, h(Display, null)),
+      { fallback: h("span", { id: "fallback" }, "...") },
+      h(I18nProvider, { runtime }, h(Display, null)),
+    );
+    expect(container.querySelector("#out")!.textContent).toBe("Hello");
+
+    // Load the French texts BEFORE the locale changes: the gate then has nothing to wait
+    // for, so the switch never reaches the fallback. (A `startTransition` around the
+    // switch would not help - useSyncExternalStore updates are always urgent.)
+    await act(async () => {
+      await runtime.ensureTexts([greetingTexts], "fr");
+    });
+    act(() => mutableSource.setLocale("fr"));
+
+    expect(container.querySelector("#fallback")).toBeNull();
+    expect(container.querySelector("#out")!.textContent).toBe("Bonjour");
+  });
+
+  it("does not suspend when nothing is pending", () => {
+    const readySource: TextSource & LoadingAware = {
+      resolve: (request) => (request.key === "hello" ? "Hallo" : undefined),
+      ensure: () => undefined,
+    };
+    const appRuntime = setupI18n({
+      localeSource: "de",
+      textSource: readySource,
+    });
+
+    function Display() {
+      useSuspenseTexts([greetingTexts]);
+      const { t } = useI18n(greetingTexts);
+      return h("span", { id: "out" }, t("hello"));
+    }
+    mount(
+      Suspense,
+      { fallback: h("span", { id: "fallback" }, "loading...") },
+      h(I18nProvider, { runtime: appRuntime }, h(Display, null)),
+    );
+
+    expect(container.querySelector("#fallback")).toBeNull();
+    expect(container.querySelector("#out")!.textContent).toBe("Hallo");
+  });
+
+  it("is a no-op when the source cannot load on demand", () => {
+    const plainSource: TextSource = {
+      resolve: (request) => (request.key === "hello" ? "Hallo" : undefined),
+    };
+    const appRuntime = setupI18n({
+      localeSource: "de",
+      textSource: plainSource,
+    });
+
+    function Display() {
+      useSuspenseTexts([greetingTexts]);
+      const { t } = useI18n(greetingTexts);
+      return h("span", { id: "out" }, t("hello"));
+    }
+    mount(
+      Suspense,
+      { fallback: h("span", { id: "fallback" }, "loading...") },
+      h(I18nProvider, { runtime: appRuntime }, h(Display, null)),
     );
 
     expect(container.querySelector("#fallback")).toBeNull();

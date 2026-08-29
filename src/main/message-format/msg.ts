@@ -1,5 +1,5 @@
 import IntlMessageFormat from "intl-messageformat";
-import type { TranslationFn } from "picolingo";
+import type { TranslationFn } from "../core/index.js";
 
 export { msg };
 
@@ -11,10 +11,10 @@ function msg<P extends Record<string, unknown>>(
 ): TranslationFn<P> {
   // The type signature already blocks this for TypeScript callers; this is the runtime
   // twin (mirroring `checkTexts`) for plain-JS callers, who would otherwise see their
-  // interpolated value silently dropped — `strings.raw.join("")` ignores it entirely.
+  // interpolated value silently dropped - `strings.raw.join("")` ignores it entirely.
   if (expr.length > 0) {
     throw new TypeError(
-      "msg: interpolated values (${...}) are not supported — write the ICU placeholder " +
+      "msg: interpolated values (${...}) are not supported - write the ICU placeholder " +
         "directly in the string, e.g. msg`Hello {name}` instead of msg`Hello ${name}`.",
     );
   }

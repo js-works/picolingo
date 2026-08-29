@@ -3,7 +3,7 @@
  * Isolated test for I18nProvider's defensive `ref.current` null-check inside its
  * DOM-bridge effect. Under React's real ref-before-effect commit guarantees this
  * branch is not reachable through normal rendering (the wrapper div's ref is always
- * attached before the effect runs) — this file mocks `useRef` to force it anyway, so
+ * attached before the effect runs) - this file mocks `useRef` to force it anyway, so
  * the fallback path itself (skip `provideI18n`, no crash) is verified rather than
  * left untested. Kept separate from context.test.ts so the mock does not affect
  * the rest of the suite.
@@ -26,17 +26,17 @@ describe("I18nProvider (ref.current unavailable at effect time)", () => {
   it("does not crash and skips provideI18n", async () => {
     const { act, createElement: h } = await import("react");
     const { createRoot } = await import("react-dom/client");
-    const { createI18n } = await import("../core.js");
-    const { I18nProvider } = await import("./context.js");
+    const { setupI18n } = await import("../../main/core/index.js");
+    const { I18nProvider } = await import("../../main/react/context.js");
 
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    const i18n = createI18n({ localeSource: { getLocale: () => "de" } });
+    const runtime = setupI18n({ localeSource: "de" });
 
     expect(() => {
       act(() => {
-        root.render(h(I18nProvider, { i18n }, h("span", null, "x")));
+        root.render(h(I18nProvider, { runtime }, h("span", null, "x")));
       });
     }).not.toThrow();
 

@@ -1,17 +1,27 @@
 // @vitest-environment jsdom
 /**
- * Tests for the reactive controller (`i18nController`): instance resolution order,
+ * Tests for the reactive controller (`connectI18n`): runtime resolution order,
  * reactivity, delegation of the full I18n surface, and the protocol edge cases (late
  * values, provider switching, unsubscribe identity).
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createI18n, createNamespace } from "../core.js";
-import type { I18n, LocaleSource } from "../core.js";
-import { i18nController } from "./controller.js";
-import { provideI18n, i18nContext, I18nProviderElement } from "./provider.js";
-import type { I18nController } from "./controller.js";
+import {
+  setupI18n,
+  createNamespace,
+  defaultTextSource,
+  someTexts,
+  textCatalog,
+} from "../../main/core/index.js";
+import type { I18n, I18nRuntime, LocaleSource, TextBundle } from "../../main/core/index.js";
+import { connectI18n } from "../../main/web-components/controller.js";
+import {
+  provideI18n,
+  i18nContext,
+  I18nProviderElement,
+} from "../../main/web-components/provider.js";
+import type { I18nController } from "../../main/web-components/controller.js";
 
 const greetingTexts = createNamespace({ key: "greeting", defaults: { hello: "Hello" } });
 const datePickerTexts = createNamespace({
@@ -23,8 +33,8 @@ const datePickerTexts = createNamespace({
   },
 });
 
-function createFixedLocaleI18n(locale: string): I18n {
-  return createI18n({ localeSource: { getLocale: () => locale } });
+function createFixedLocaleRuntime(locale: string): I18nRuntime {
+  return setupI18n({ localeSource: locale });
 }
 
 /** A locale source with a controllable locale and change channel. */
@@ -75,51 +85,63 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("i18nController", () => {
+describe("connectI18n", () => {
   it("registers itself with the host and is frozen", () => {
     const host = mountHost();
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     expect(host.controllers).toEqual([controllerI18n]);
     expect(Object.isFrozen(controllerI18n)).toBe(true);
   });
 
-  it("prefers the explicit argument and never consults the tree for it", () => {
-    const explicitI18n = createFixedLocaleI18n("de");
-    const providerI18n = createFixedLocaleI18n("fr");
-    const stopProviding = provideI18n(document.body, providerI18n);
-    const host = mountHost();
+  it("serves a plain custom element: own requestUpdate, manual connect/disconnect", () => {
+    const mutableSource = createMutableLocaleSource("fr");
+    const stopProviding = provideI18n(document.body, setupI18n({ localeSource: mutableSource }));
+    const plainHost = document.createElement("div"); // no addController, no requestUpdate
+    document.body.appendChild(plainHost);
+    const render = vi.fn();
 
-    const controllerI18n = i18nController(host, explicitI18n);
-    controllerI18n.hostConnected();
-    expect(controllerI18n.locale()).toBe("de"); // not "fr"
+    const controllerI18n = connectI18n(plainHost, { requestUpdate: render });
+    controllerI18n.connect();
+    expect(controllerI18n.locale()).toBe("fr"); // context request works from any EventTarget
+
+    render.mockClear();
+    mutableSource.setLocale("es");
+    expect(render).toHaveBeenCalledTimes(1); // the supplied callback stands in for Lit's
+    expect(controllerI18n.locale()).toBe("es");
+
+    controllerI18n.disconnect();
+    mutableSource.setLocale("pt");
+    expect(render).toHaveBeenCalledTimes(1); // unsubscribed
     stopProviding();
   });
 
   it("falls back to the internal zero-config instance without any provider", () => {
     document.documentElement.setAttribute("lang", "it");
     const host = mountHost();
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
     expect(controllerI18n.locale()).toBe("it"); // <html lang> via zero-config fallback
     expect(controllerI18n.text(greetingTexts, "hello")).toBe("Hello");
   });
 
-  it("reuses the same internal fallback instance across independent controllers", () => {
-    const hostA = mountHost();
-    const hostB = mountHost();
-    const controllerA = i18nController(hostA);
-    const controllerB = i18nController(hostB);
+  it("shares one internal fallback runtime across independent controllers", () => {
+    document.documentElement.setAttribute("lang", "pt");
+    const controllerA = connectI18n(mountHost());
+    const controllerB = connectI18n(mountHost());
     controllerA.hostConnected();
     controllerB.hostConnected();
-    expect(controllerA.withLocale("fr")).toBe(controllerB.withLocale("fr"));
+    // Same ambient locale source, same defaults - both sit on the one fallback runtime.
+    expect(controllerA.locale()).toBe("pt");
+    expect(controllerB.locale()).toBe(controllerA.locale());
+    document.documentElement.removeAttribute("lang");
   });
 
   it("adopts an instance provided up the tree on connect", () => {
-    const appI18n = createFixedLocaleI18n("fr");
+    const appI18n = createFixedLocaleRuntime("fr");
     const stopProviding = provideI18n(document.body, appI18n);
     const host = mountHost();
 
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
     expect(controllerI18n.locale()).toBe("fr");
     stopProviding();
@@ -128,8 +150,13 @@ describe("i18nController", () => {
   it("re-renders the host on locale and text changes of the current instance", () => {
     const mutableSource = createMutableLocaleSource("de");
     const host = mountHost();
-    const controllerI18n = i18nController(host, createI18n({ localeSource: mutableSource }));
+    const providerElement = mountProvider();
+    providerElement.runtime = setupI18n({ localeSource: mutableSource });
+    host.remove();
+    providerElement.appendChild(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
+    host.requestUpdate.mockClear(); // adopting the provider runtime already re-rendered once
 
     mutableSource.setLocale("en");
     expect(host.requestUpdate).toHaveBeenCalledTimes(1);
@@ -139,10 +166,10 @@ describe("i18nController", () => {
   it("stops re-rendering and unsubscribes from the provider on disconnect", () => {
     const mutableSource = createMutableLocaleSource("de");
     const providerElement = mountProvider();
-    providerElement.i18n = createI18n({ localeSource: mutableSource });
+    providerElement.runtime = setupI18n({ localeSource: mutableSource });
     const host = mountHost(providerElement);
 
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
     expect(controllerI18n.locale()).toBe("de");
     host.requestUpdate.mockClear(); // adopting the provider instance already re-rendered once
@@ -151,13 +178,14 @@ describe("i18nController", () => {
     mutableSource.setLocale("en"); // change subscription must be gone
     expect(host.requestUpdate).not.toHaveBeenCalled();
 
-    providerElement.i18n = createFixedLocaleI18n("fr"); // provider subscription must be gone
+    providerElement.runtime = createFixedLocaleRuntime("fr"); // provider subscription must be gone
     expect(controllerI18n.locale()).toBe("en"); // still the OLD instance's (live) locale
   });
 
   it("delegates the full I18n surface to the current instance", () => {
     const host = mountHost();
-    const controllerI18n = i18nController(host, createFixedLocaleI18n("de-DE"));
+    const stopProviding = provideI18n(document.body, createFixedLocaleRuntime("de-DE"));
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
 
     expect(controllerI18n.formatNumber(1234.5)).toBe(new Intl.NumberFormat("de-DE").format(1234.5));
@@ -192,16 +220,13 @@ describe("i18nController", () => {
     expect(controllerI18n.hasText(greetingTexts, "hello")).toBe(false); // no textSource configured
     expect(controllerI18n.hasText(greetingTexts, "hello", true)).toBe(true); // default hit
     expect(controllerI18n.withLocale("fr").locale()).toBe("fr");
-
-    const changes = vi.fn();
-    const unsubscribe = controllerI18n.onChange(changes);
-    unsubscribe();
+    stopProviding();
   });
 
   it("bindTexts delegates lazily: bound lookups follow a provider switch", () => {
     const providerElement = mountProvider();
     const host = mountHost(providerElement);
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
 
     const unboundLookup = controllerI18n.bindTexts();
@@ -211,48 +236,89 @@ describe("i18nController", () => {
     expect(greetingLookup(datePickerTexts, "range", { count: 3 })).toBe("3 days"); // fully-qualified
 
     // switch the instance via the provider: previously bound lookups must follow
-    providerElement.i18n = createFixedLocaleI18n("fr-CH");
+    providerElement.runtime = createFixedLocaleRuntime("fr-CH");
     expect(controllerI18n.locale()).toBe("fr-CH");
     expect(greetingLookup(datePickerTexts, "range", { count: 1234.5 })).toBe(
       `${new Intl.NumberFormat("fr-CH").format(1234.5)} days`,
     );
   });
 
+  it("hands out lookups and siblings that survive a provider switch", () => {
+    const providerElement = mountProvider();
+    const host = mountHost(providerElement);
+    const controllerI18n = connectI18n(host);
+    controllerI18n.hostConnected();
+
+    // Both taken BEFORE any provider answered, as class fields would be.
+    const t = controllerI18n.bindTexts(greetingTexts);
+    const german = controllerI18n.withLocale("de-DE");
+    expect(german.formatNumber(1234.5)).toBe(new Intl.NumberFormat("de-DE").format(1234.5));
+
+    providerElement.runtime = setupI18n({
+      localeSource: "de",
+      textSource: defaultTextSource({
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+      }),
+    });
+
+    expect(t("hello")).toBe("Hallo"); // the bound lookup followed the switch
+    expect(german.text(greetingTexts, "hello")).toBe("Hallo"); // and so did the sibling
+    expect(german.locale()).toBe("de-DE"); // still bound to its own locale
+  });
+
   it("follows repeated provider value changes (stable unsubscribe identity)", () => {
     const providerElement = mountProvider();
     const host = mountHost(providerElement);
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
 
-    providerElement.i18n = createFixedLocaleI18n("de");
+    providerElement.runtime = createFixedLocaleRuntime("de");
     expect(controllerI18n.locale()).toBe("de");
-    providerElement.i18n = createFixedLocaleI18n("fr");
+    providerElement.runtime = createFixedLocaleRuntime("fr");
     expect(controllerI18n.locale()).toBe("fr");
-    providerElement.i18n = createFixedLocaleI18n("es"); // regression: third switch still works
+    providerElement.runtime = createFixedLocaleRuntime("es"); // regression: third switch still works
     expect(controllerI18n.locale()).toBe("es");
     expect(host.requestUpdate).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a `t` bound before a swap pointing at the CURRENT instance", () => {
+    const providerElement = mountProvider();
+    const host = mountHost(providerElement);
+    const controllerI18n = connectI18n(host, { texts: [greetingTexts] });
+    // Bound once, as a class field would be - before any provider has answered.
+    const t = controllerI18n.bindTexts(greetingTexts);
+    controllerI18n.hostConnected();
+    expect(t("hello")).toBe("Hello"); // zero-config fallback
+
+    providerElement.runtime = setupI18n({
+      localeSource: "de",
+      textSource: defaultTextSource({
+        texts: [{ de: [someTexts(greetingTexts, { hello: "Hallo" })] }],
+      }),
+    });
+    expect(t("hello")).toBe("Hallo"); // same `t`, new instance
+  });
+
   it("keeps the latest answer when an inner provider arrives after an outer one", () => {
-    const outerI18n = createFixedLocaleI18n("en");
+    const outerI18n = createFixedLocaleRuntime("en");
     const stopProviding = provideI18n(document.body, outerI18n);
     const innerProvider = mountProvider(); // no value yet -> does not claim requests
     const host = mountHost(innerProvider);
 
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
     expect(controllerI18n.locale()).toBe("en"); // outer served meanwhile
 
-    innerProvider.i18n = createFixedLocaleI18n("de"); // late inner value wins
+    innerProvider.runtime = createFixedLocaleRuntime("de"); // late inner value wins
     expect(controllerI18n.locale()).toBe("de");
     stopProviding();
   });
 
   it("re-adopts the same instance on reconnect without re-rendering", () => {
     const providerElement = mountProvider();
-    providerElement.i18n = createFixedLocaleI18n("de");
+    providerElement.runtime = createFixedLocaleRuntime("de");
     const host = mountHost(providerElement);
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
 
     controllerI18n.hostConnected();
     controllerI18n.hostDisconnected();
@@ -264,36 +330,123 @@ describe("i18nController", () => {
   });
 
   it("adopts a late answer while disconnected without touching the host", () => {
-    const stopProviding = provideI18n(document.body, createFixedLocaleI18n("en"));
+    const stopProviding = provideI18n(document.body, createFixedLocaleRuntime("en"));
     const innerProvider = mountProvider(); // value-less: subscription survives disconnect
     const host = mountHost(innerProvider);
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
 
     controllerI18n.hostConnected(); // outer answers; inner remembers the subscriber
     controllerI18n.hostDisconnected();
     host.requestUpdate.mockClear();
 
-    innerProvider.i18n = createFixedLocaleI18n("de"); // late answer while disconnected
+    innerProvider.runtime = createFixedLocaleRuntime("de"); // late answer while disconnected
     expect(controllerI18n.locale()).toBe("de"); // adopted for the next connect
     expect(host.requestUpdate).not.toHaveBeenCalled(); // but no render while disconnected
     stopProviding();
   });
 
   it("tolerates minimal providers that answer subscribe requests without unsubscribe", () => {
-    const bareI18n = createFixedLocaleI18n("pt");
+    const bareRuntime = createFixedLocaleRuntime("pt");
     const bareProvider = (event: Event): void => {
-      const request = event as Event & { context?: unknown; callback?: (value: I18n) => void };
+      const request = event as Event & {
+        context?: unknown;
+        callback?: (value: I18nRuntime) => void;
+      };
       if (request.context === i18nContext && request.callback) {
         event.stopPropagation();
-        request.callback(bareI18n); // no unsubscribe at all
+        request.callback(bareRuntime); // no unsubscribe at all
       }
     };
     document.body.addEventListener("context-request", bareProvider);
     const host = mountHost();
-    const controllerI18n = i18nController(host);
+    const controllerI18n = connectI18n(host);
     controllerI18n.hostConnected();
     expect(controllerI18n.locale()).toBe("pt");
     expect(() => controllerI18n.hostDisconnected()).not.toThrow();
     document.body.removeEventListener("context-request", bareProvider);
+  });
+});
+
+// -------------------------------------------------------------------
+// Loading state - the DOM has no Suspense, so the component renders around `loading`
+// -------------------------------------------------------------------
+
+describe("connectI18n loading", () => {
+  const germanGreeting: TextBundle = { de: [someTexts(greetingTexts, { hello: "Hallo" })] };
+
+  /** A catalog whose single load is released by hand. */
+  function createControllableCatalog() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const catalog = textCatalog({
+      namespaces: [greetingTexts],
+      locales: ["de"],
+      load: async () => {
+        await gate;
+        return germanGreeting;
+      },
+    });
+    return { catalog, release };
+  }
+
+  it("is false when no texts were declared", () => {
+    const host = mountHost();
+    const stopProviding = provideI18n(document.body, createFixedLocaleRuntime("de"));
+    const controllerI18n = connectI18n(host);
+    controllerI18n.hostConnected();
+    expect(controllerI18n.loading).toBe(false);
+    stopProviding();
+  });
+
+  it("is false when the source cannot load on demand", () => {
+    const host = mountHost();
+    const stopProviding = provideI18n(document.body, createFixedLocaleRuntime("de"));
+    const controllerI18n = connectI18n(host, { texts: [greetingTexts] });
+    controllerI18n.hostConnected();
+    expect(controllerI18n.loading).toBe(false);
+    stopProviding();
+  });
+
+  it("starts the load at CONNECT time and clears itself when the texts land", async () => {
+    const { catalog, release } = createControllableCatalog();
+    const appRuntime = setupI18n({
+      localeSource: "de",
+      textSource: defaultTextSource({ texts: [catalog] }),
+    });
+    const stopProviding = provideI18n(document.body, appRuntime);
+    const host = mountHost();
+    const controllerI18n = connectI18n(host, { texts: [greetingTexts] });
+
+    controllerI18n.hostConnected();
+    expect(controllerI18n.loading).toBe(true); // nothing was read yet - declaring sufficed
+    expect(controllerI18n.text(greetingTexts, "hello")).toBe("Hello"); // default meanwhile
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(controllerI18n.loading).toBe(false);
+    expect(controllerI18n.text(greetingTexts, "hello")).toBe("Hallo");
+    expect(host.requestUpdate).toHaveBeenCalled();
+    stopProviding();
+  });
+
+  it("re-renders the host when the loading flag flips", async () => {
+    const { catalog, release } = createControllableCatalog();
+    const appRuntime = setupI18n({
+      localeSource: "de",
+      textSource: defaultTextSource({ texts: [catalog] }),
+    });
+    const stopProviding = provideI18n(document.body, appRuntime);
+    const host = mountHost();
+    const controllerI18n = connectI18n(host, { texts: [greetingTexts] });
+    controllerI18n.hostConnected();
+    host.requestUpdate.mockClear();
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.requestUpdate).toHaveBeenCalled();
+    stopProviding();
   });
 });

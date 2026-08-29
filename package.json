@@ -1,6 +1,6 @@
 {
   "name": "picolingo",
-  "version": "0.0.1",
+  "version": "0.0.2-dev.1",
   "description": "A small, type-safe i18n facade for vanilla JS, web components and React",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,6 +21,10 @@
     "./react": {
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js"
+    },
+    "./dev": {
+      "types": "./dist/dev/index.d.ts",
+      "import": "./dist/dev/index.js"
     }
   },
   "files": [
@@ -35,9 +39,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "loc": "sloc src/core.ts",
-    "loc:src": "sloc . --exclude 'node_modules|coverage|dist|\\.test\\.|\\.config\\.'",
-    "loc:json": "sloc src/core.ts --format json"
+    "size": "vite build && size-limit",
+    "loc": "sloc src/main",
+    "loc:json": "sloc src/main --format json"
   },
   "repository": {
     "type": "git",
@@ -62,17 +66,20 @@
   "homepage": "https://github.com/js-works/picolingo#readme",
   "devDependencies": {
     "@microsoft/api-extractor": "7.58.9",
+    "@size-limit/esbuild": "13.0.3",
+    "@size-limit/file": "13.0.3",
     "@types/archiver": "7.0.0",
     "@types/node": "26.0.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
     "@vitest/coverage-v8": "4.1.9",
     "archiver": "7.0.1",
     "esbuild": "0.28.1",
-    "intl-messageformat": "^11.2.9",
+    "intl-messageformat": "11.2.14",
     "jsdom": "29.1.1",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.7",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "size-limit": "13.0.3",
     "sloc": "0.3.2",
     "typescript": "6.0.3",
     "vite": "8.0.16",
@@ -86,5 +93,8 @@
     "react": {
       "optional": true
     }
+  },
+  "allowScripts": {
+    "esbuild": false
   }
 }

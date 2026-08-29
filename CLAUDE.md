@@ -2,54 +2,58 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Never commit or push
+
+Do not run `git commit` or `git push` - the maintainers land every change themselves. Leave finished work in the working tree and report what changed. Other git commands (`status`, `diff`, `log`, `stash`) are fine. Both commands are additionally blocked via `permissions.deny` in `.claude/settings.json`.
+
 ## What this is
 
-`Picolingo` is a small, type-safe i18n facade for vanilla JS, web components, and React. Zero-config components ship default texts; translations are attached separately; apps wire it all together. See `README.md` for the full public API tour and `src/core.ts`'s file-level docblock for the internal architecture rationale — both are more detailed than what's summarized below.
+`Picolingo` is a small, type-safe i18n facade for vanilla JS, web components, and React. Zero-config components ship default texts; translations are attached separately; apps wire it all together. See `README.md` for the full public API tour and [ARCHITECTURE.md](ARCHITECTURE.md) for the internal design rationale.
 
 ## Commands
 
-- `npm run build` — production build via Vite (three entry points, see Architecture below)
-- `npm test` — run the full test suite once (Vitest)
-- `npm run test:watch` — Vitest in watch mode
-- `npm run coverage` — run tests with v8 coverage (thresholds: 95% statements/functions/lines, 90% branches — enforced in `vitest.config.ts`)
-- Single test file: `npx vitest run src/core.test.ts`
+- `npm run build` - production build via Vite (three entry points, see Architecture below)
+- `npm test` - run the full test suite once (Vitest)
+- `npm run test:watch` - Vitest in watch mode
+- `npm run coverage` - run tests with v8 coverage (thresholds: 95% statements/functions/lines, 90% branches - enforced in `vitest.config.ts`)
+- `npm run size` - build, then report what an app actually ships, per scenario (minified + brotli; React ignored, it is a peer). Each row in `.size-limit.json` is a COMPLETE setup, not a component - rows are alternatives and must never be added up, since every binding already contains the part of the core it uses. The multi-package rows point at the `export *` fixtures in `scripts/size/`, because size-limit does not union several paths in one entry. Reporting only: no entry declares a `limit`, so it never fails; add `"limit": "4 kB"` to turn one into a CI budget. Note that the sizes Vite prints during the build are gzip of UNMINIFIED code - roughly three times the real cost, since the build ships readable code on purpose and consumers minify.
+- Single test file: `npx vitest run src/test/core.test.ts`
 - Single test by name: `npx vitest run -t "test name substring"`
-- `npm run build:release` — build, then zip the exact git-tracked source tree into `dist/source/` (via `scripts/pack-source.mts`)
-- `npm run loc` / `npm run loc:src` — line counts (`sloc`)
+- `npm run build:release` - build, then zip the exact git-tracked source tree into `dist/source/` (via `scripts/pack-source.mts`)
+- `npm run loc` - line counts over `src/main` (`sloc`); `npm run loc:json` for the same as JSON
 
 No lint script is configured; formatting is Prettier (`.prettierrc`: `printWidth: 100`) and `.editorconfig` (2-space indent, LF, trim trailing whitespace).
 
 ## Architecture
 
-The core lives entirely in `src/core.ts` (~900 lines, single file by design) and is built from three swappable strategies plus a fixed core:
+**[ARCHITECTURE.md](ARCHITECTURE.md) is the single source of truth** for the design: the
+runtime/facade split, the three strategies, the resolution order, the module map of
+`src/main/core/`, the other entry points, and the three ecosystem roles. Read it before
+changing anything structural, and update it in the same commit when a decision there
+stops being true - do not restate it here or in a docblock.
 
-- **`localeSource`** — which locale is active, and when it changes.
-- **`textSource`** — resolves `(locale, namespace, key, params) -> string | undefined`, and signals when available texts change (e.g. an async bundle finishes loading). `undefined` means a genuine miss — adapters must do real miss detection, not a truthiness check, since `""` is a valid translation.
-- **`middlewares`** — decorate the *whole* resolution pipeline (see namespace defaults and nested lookups too), e.g. pseudo-localization or miss reporting.
-- **Intl formatting** (`formatNumber`, `formatDateTime`, `formatRelativeTime`, `formatList`, and range/raw-formatter variants) is the one deliberately non-configurable part — a fixed, cached-and-shared `Intl` core.
+Two things worth having in mind while working:
 
-Resolution order: `middlewares -> textSource -> namespace defaults -> bare key`. A string is always returned; `undefined` never escapes to a caller.
-
-Three strictly separated ecosystem roles (see README "Who does what"):
-1. **Component author** — defines a `Namespace` via `createNamespace({ key, defaults })`. Defaults define both the TypeScript shape (keys + per-key param types) and the texts of last resort.
-2. **Translation author** — produces a `TextBundle` via `bundleTexts(...)`, using `someTexts` (partial, falls through the pipeline) or `allTexts` (complete, checked at compile time *and* runtime).
-3. **App author** — wires bundles into a `textSource` (typically `defaultTextSource`), picks a `localeSource`, and calls `createI18n(config?)`. No library-owned global state — instances are created explicitly and distributed by the app (argument passing, React context, or the DOM Context Community Protocol for custom elements).
-
-Package entry points (each independently built and externalized where noted — see `vite.config.ts`):
-- `.` → `src/index.ts` → re-exports `src/core.ts` (the dependency-free core; vanilla JS/TS)
-- `./message-format` → `src/message-format/index.ts` → `src/message-format/msg.ts` — an ICU MessageFormat `msg` tagged-template helper built on `intl-messageformat`, producing a `TranslationFn` (per-locale formatter instances are cached)
-- `./web-components` → `src/web-components/index.ts` — `i18nController` (Lit reactive controller) and `i18nProvider`/`provideI18n`, distributing an instance via the DOM Context Community Protocol; must degrade gracefully with no DOM (see the `.node.test.ts` below)
-- `./react` → `src/react/index.ts` → `src/react/context.ts` — `I18nProvider` + `useI18n` (+ `useI18nSuspense`). The provider feeds both React context and the DOM context protocol (for web components rendered inside a React subtree), from one `display: contents` wrapper. `useI18n` is built on `useSyncExternalStore`, minting a fresh statically-bound sibling instance per change since the dynamic instance is reference-stable. Written as JSX-free `.ts` (`createElement as h`) since it's the library's only file that would otherwise need `.tsx`.
-
-The core is bundled as a shared chunk across all three entries (one instance, no duplication); React is kept external (optional peer, owned by the host app).
+- Layout is Maven-style: shipped code in `src/main`, tests in `src/test` mirroring it.
+  `tsconfig.json` and Vite see only `src/main`, Vitest only `src/test`.
+- Bindings are handed the `I18nRuntime`, never an `I18n`. If something inside a binding
+  seems to need more than the runtime exposes, that is a design question, not a reason
+  to reach past `core/index.ts`.
 
 ### Test environments
 
 Vitest defaults to the `node` environment; individual files opt into `jsdom` via a `// @vitest-environment jsdom` docblock comment (not global config), because some behavior must be verified in both:
-- `*.dom.test.ts` / files with the jsdom pragma — DOM-dependent behavior (e.g. `<html lang>` `MutationObserver` monitoring, custom element integration).
-- `*.node.test.ts` — explicitly verifies isomorphic/SSR-safe behavior (modules must load without a DOM and skip registration gracefully).
+
+- `*.dom.test.ts` / files with the jsdom pragma - DOM-dependent behavior (e.g. `<html lang>` `MutationObserver` monitoring, custom element integration).
+- `*.node.test.ts` - explicitly verifies isomorphic/SSR-safe behavior (modules must load without a DOM and skip registration gracefully).
 
 When adding tests for DOM-touching code, add both a jsdom-environment test for behavior and consider whether a node-environment import test is needed to guard the isomorphic path.
+
+## ASCII only
+
+Every file - code, comments, docs, tests - uses ASCII characters exclusively. No typographic punctuation: write `-` instead of an em or en dash, `->` instead of an arrow, `...` instead of an ellipsis, `"` and `'` instead of curly quotes, `(c)` instead of a copyright sign.
+
+The one exception is text that genuinely belongs to a non-ASCII language: translation examples and test fixtures such as `"Gruezi"`-style German, French, or Chinese strings keep their real spelling, because mangling them would make them wrong.
 
 ## TypeScript coding conventions
 
